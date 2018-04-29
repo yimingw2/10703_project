@@ -58,12 +58,12 @@ class ModelConfig(object):  # Takes care of shape, dimensions used for tf model
     l2_hidden_size = 15
 
     # output
-    num_classes = 3
+    num_classes = 42 # 3 # MODIFIED
 
     # Vocab
     word_vocab_size = None
     pos_vocab_size = None
-    dep_vocab_size = None
+    dep_vocab_size = 42 # None
 
     # num_epochs
     n_epochs = 20
@@ -152,35 +152,41 @@ class Sentence(object):
 
 
     def load_gold_dependency_mapping(self):
+        # MODIFIED to add arc_label
         for token in self.tokens:
             if token.head_id != -1:
                 token.parent = self.tokens[token.head_id]
                 if token.head_id > token.token_id:
-                    token.parent.left_children.append(token.token_id)
+                    token.parent.left_children.append((token.token_id, token.pos)) # MODIFIED add arc_label
                 else:
-                    token.parent.right_children.append(token.token_id)
+                    token.parent.right_children.append((token.token_id, token.pos)) # MODIFIED add arc_label
             else:
                 token.parent = self.Root
 
         for token in self.tokens:
-            token.left_children.sort()
-            token.right_children.sort()
+            token.left_children = sorted(token.left_children, key=lambda x:x[0]) # MODIFIED
+            token.right_children = sorted(token.right_children, key=lambda x:x[0]) # MODIFIED
+            # token.left_children.sort()
+            # token.right_children.sort()
 
 
-    def update_child_dependencies(self, curr_transition):
-        if curr_transition == 0:
+    def update_child_dependencies(self, curr_transition, arc_label):
+        # MODIFIED to add arc_label
+        if curr_transition == 1: # 0:
             head = self.stack[-1]
             dependent = self.stack[-2]
-        elif curr_transition == 1:
+        elif curr_transition == 2: # 1:
             head = self.stack[-2]
             dependent = self.stack[-1]
 
         if head.token_id > dependent.token_id:
-            head.left_children.append(dependent.token_id)
-            head.left_children.sort()
+            head.left_children.append((dependent.token_id, arc_label))
+            head.left_children = sorted(head.left_children, key=lambda x:x[0]) # MODIFIED
+            # head.left_children.sort() # MODIFIED
         else:
-            head.right_children.append(dependent.token_id)
-            head.right_children.sort()
+            head.right_children.append((dependent.token_id, arc_label))
+            head.right_children = sorted(head.right_children, key=lambda x:x[0]) # MODIFIED
+            # head.right_children.sort() # MODIFIED
             # dependent.head_id = head.token_id
 
 
@@ -191,51 +197,58 @@ class Sentence(object):
         if direction == "left":
             if len(token.left_children) > index:
                 return self.get_child_by_index_and_depth(
-                    self.tokens[token.left_children[index]], index, direction, depth - 1)
+                    self.tokens[token.left_children[index][0]], index, direction, depth - 1) # MODIFIED add [0]
             return NULL_TOKEN
         else:
             if len(token.right_children) > index:
                 return self.get_child_by_index_and_depth(
-                    self.tokens[token.right_children[::-1][index]], index, direction, depth - 1)
+                    self.tokens[token.right_children[::-1][index][0]], index, direction, depth - 1) # MODIFIED add [0]
             return NULL_TOKEN
 
 
-    def get_legal_labels(self):
-        labels = ([1] if len(self.stack) > 2 else [0])
-        labels += ([1] if len(self.stack) >= 2 else [0])
-        labels += [1] if len(self.buff) > 0 else [0]
+    def get_legal_labels(self, num_dep):
+        # labels = ([1] if len(self.stack) > 2 else [0])
+        # labels += ([1] if len(self.stack) >= 2 else [0])
+        # labels += [1] if len(self.buff) > 0 else [0]
+        labels = ([1] if len(self.buff) > 0 else [0]) # 0: shift
+        labels_temp = ([1] if len(self.stack) > 2 else [0]) # 1: left-arc
+        labels_temp += ([1] if len(self.stack) >= 2 else [0]) # 2: right-arc
+        for i in range(num_dep):
+            labels += labels_temp
         return labels
 
 
     def get_transition_from_current_state(self):  # logic to get next transition
+        # MODIFIED: change arc label
         if len(self.stack) < 2:
-            return 2  # shift
+            return 0 # 2  # shift
 
         stack_token_0 = self.stack[-1]
         stack_token_1 = self.stack[-2]
         if stack_token_1.token_id >= 0 and stack_token_1.head_id == stack_token_0.token_id:  # left arc
-            return 0
+            return 1 # 0
         elif stack_token_1.token_id >= -1 and stack_token_0.head_id == stack_token_1.token_id \
                 and stack_token_0.token_id not in map(lambda x: x.head_id, self.buff):
-            return 1  # right arc
+            return 2 # 1  # right arc
         else:
-            return 2 if len(self.buff) != 0 else None
+            return 0 if len(self.buff) != 0 else None # return 2 if len(self.buff) != 0 else None
 
 
-    def update_state_by_transition(self, transition, gold=True):  # updates stack, buffer and dependencies
+    def update_state_by_transition(self, transition, arc_label, gold=True):  # updates stack, buffer and dependencies
+        # MODIFIED
         if transition is not None:
-            if transition == 2:  # shift
+            if transition == 0: # 2:  # shift
                 self.stack.append(self.buff[0])
                 self.buff = self.buff[1:] if len(self.buff) > 1 else []
-            elif transition == 0:  # left arc
+            elif transition == 1: # 0:  # left arc
                 self.dependencies.append(
-                    (self.stack[-1], self.stack[-2])) if gold else self.predicted_dependencies.append(
-                    (self.stack[-1], self.stack[-2]))
+                    (self.stack[-1], self.stack[-2], arc_label)) if gold else self.predicted_dependencies.append(
+                    (self.stack[-1], self.stack[-2], arc_label))
                 self.stack = self.stack[:-2] + self.stack[-1:]
-            elif transition == 1:  # right arc
+            elif transition == 2: # 1:  # right arc
                 self.dependencies.append(
-                    (self.stack[-2], self.stack[-1])) if gold else self.predicted_dependencies.append(
-                    (self.stack[-2], self.stack[-1]))
+                    (self.stack[-2], self.stack[-1], arc_label)) if gold else self.predicted_dependencies.append(
+                    (self.stack[-2], self.stack[-1], arc_label))
                 self.stack = self.stack[:-1]
 
 
@@ -357,6 +370,8 @@ class Dataset(object):
 
         # dep embedding
         self.model_config.dep_vocab_size = len(self.dep2idx)
+        # MODIFIED ADD
+        self.model_config.num_classes = 2 * len(self.dep2idx) + 1
         dep_embedding_matrix = np.asarray(
             np.random.normal(0, 0.9, size=(self.model_config.dep_vocab_size, self.model_config.embedding_dim)),
             dtype=np.float32)
@@ -450,7 +465,7 @@ class FeatureExtractor(object):
 
 
     def create_instances_for_data(self, data, word2idx, pos2idx, dep2idx):
-        lables = []
+        labels = []
         word_inputs = []
         pos_inputs = []
         dep_inputs = []
@@ -459,18 +474,35 @@ class FeatureExtractor(object):
 
             for _ in range(num_words * 2):
                 word_input, pos_input, dep_input = self.extract_for_current_state(sentence, word2idx, pos2idx, dep2idx)
-                legal_labels = sentence.get_legal_labels()
+                # legal_labels = sentence.get_legal_labels() # MODIFIED
                 curr_transition = sentence.get_transition_from_current_state()
                 if curr_transition is None:
                     break
-                assert legal_labels[curr_transition] == 1
+                # assert legal_labels[curr_transition] == 1 # MODIFIED
 
                 # Update left/right children
-                if curr_transition != 2:
-                    sentence.update_child_dependencies(curr_transition)
+                # MODIFIED
+                if curr_transition == 0:
+                    arc_label = None
+                else:
+                    stack_token_0 = sentence.stack[-1]
+                    stack_token_1 = sentence.stack[-2]
+                    if curr_transition == 1: # left arc
+                        arc_label = dep2idx[stack_token_1.dep]
+                    else: # right arc
+                        arc_label = dep2idx[stack_token_0.dep]
 
-                sentence.update_state_by_transition(curr_transition)
-                lables.append(curr_transition)
+                if curr_transition != 0: # != 2:
+                    sentence.update_child_dependencies(curr_transition, arc_label)
+
+                sentence.update_state_by_transition(curr_transition, arc_label)
+                # lables.append(curr_transition)
+                # MODIFIED
+                if curr_transition == 0:
+                    true_label = 0
+                else:
+                    true_label = (arc_label + 1) * 2 - (2 - curr_transition)
+                labels.append(true_label)
                 word_inputs.append(word_input)
                 pos_inputs.append(pos_input)
                 dep_inputs.append(dep_input)
@@ -481,8 +513,8 @@ class FeatureExtractor(object):
             # reset stack and buffer to default state
             sentence.reset_to_initial_state()
 
-        targets = np.zeros((len(lables), self.model_config.num_classes), dtype=np.int32)
-        targets[np.arange(len(targets)), lables] = 1
+        targets = np.zeros((len(labels), self.model_config.num_classes), dtype=np.int32)
+        targets[np.arange(len(targets)), labels] = 1
 
         return [word_inputs, pos_inputs, dep_inputs], targets
 
@@ -573,6 +605,7 @@ def load_datasets(load_existing_dump=False):
         dump_pickle(dataset.dep_embedding_matrix, os.path.join(DataConfig.dump_dir, DataConfig.dep_emb_file))
 
     print "converting data into ids.."
+    dataset.model_config.num_classes = 2 * len(dataset.dep2idx) + 1
     dataset.convert_data_to_ids()
     print "Done!"
     dataset.model_config.word_features_types = len(dataset.train_inputs[0][0])
@@ -580,6 +613,6 @@ def load_datasets(load_existing_dump=False):
     dataset.model_config.dep_features_types = len(dataset.train_inputs[2][0])
     dataset.model_config.num_features_types = dataset.model_config.word_features_types + \
                                               dataset.model_config.pos_features_types + dataset.model_config.dep_features_types
-    dataset.model_config.num_classes = len(dataset.train_targets[0])
+    # dataset.model_config.num_classes = len(dataset.train_targets[0]) # MODIFIED
 
     return dataset

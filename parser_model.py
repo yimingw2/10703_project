@@ -279,17 +279,26 @@ class ParserModel(Model):
                 predictions = sess.run(self.pred,
                                        feed_dict=self.create_feed_dict([word_inputs_batch, pos_inputs_batch,
                                                                         dep_inputs_batch]))
-                legal_labels = np.asarray([sentence.get_legal_labels() for sentence in curr_sentences],
+                # MODIFIED
+                legal_labels = np.asarray([sentence.get_legal_labels(dataset.model_config.dep_vocab_size) for sentence in curr_sentences],
                                           dtype=np.float32)
-                legal_transitions = np.argmax(predictions + 1000 * legal_labels, axis=1)
+                legal_transitions_whole = np.argmax(predictions + 1000 * legal_labels, axis=1)
+                # legal_transitions_whole = np.argmax(predictions, axis=1)
+
+                legal_transitions = np.array(legal_transitions_whole, copy=True)
+                legal_arc = np.array(legal_transitions_whole, copy=True)
+                legal_transitions[np.nonzero(legal_transitions)] = (legal_transitions[np.nonzero(legal_transitions)] - 1) % 2 + 1
+                legal_arc[np.where(legal_arc == 0)] = -1
+                legal_arc[np.where(legal_arc != -1)] = (legal_arc[np.where(legal_arc != -1)] - 1) / 2
 
                 # update left/right children so can be used for next feature vector
-                [sentence.update_child_dependencies(transition) for (sentence, transition) in
-                 zip(curr_sentences, legal_transitions) if transition != 2]
+                # MODIFIED
+                [sentence.update_child_dependencies(transition, arc_label) for (sentence, transition, arc_label) in
+                 zip(curr_sentences, legal_transitions, legal_arc) if transition != 0] # 2
 
                 # update state
-                [sentence.update_state_by_transition(legal_transition, gold=False) for (sentence, legal_transition) in
-                 zip(curr_sentences, legal_transitions)]
+                [sentence.update_state_by_transition(legal_transition, arc_label, gold=False) for (sentence, legal_transition, arc_label) in
+                 zip(curr_sentences, legal_transitions, legal_arc)]
 
                 enable_features = [0 if len(sentence.stack) == 1 and len(sentence.buff) == 0 else 1 for sentence in
                                    batch_sentences]
@@ -300,8 +309,10 @@ class ParserModel(Model):
             rem_sentences = rem_sentences[curr_batch_size:]
 
 
-    def get_UAS(self, data):
-        correct_tokens = 0
+    def get_UAS(self, data, dep2idx):
+        # MODIFIED
+        correct_tokens_UAS = 0
+        correct_tokens_LAS = 0
         all_tokens = 0
         punc_token_pos = [pos_prefix + each for each in punc_pos]
         for sentence in data:
@@ -310,18 +321,21 @@ class ParserModel(Model):
 
             head = [-2] * len(sentence.tokens)
             # assert len(sentence.dependencies) == len(sentence.predicted_dependencies)
-            for h, t, in sentence.predicted_dependencies:
-                head[t.token_id] = h.token_id
+            for h, t, l in sentence.predicted_dependencies:
+                head[t.token_id] = (h.token_id, l) # MODIFIED
 
             non_punc_tokens = [token for token in sentence.tokens if token.pos not in punc_token_pos]
-            correct_tokens += sum([1 if token.head_id == head[token.token_id] else 0 for (_, token) in enumerate(
+            correct_tokens_UAS += sum([1 if token.head_id == head[token.token_id][0] else 0 for (_, token) in enumerate(
+                non_punc_tokens)])
+            correct_tokens_LAS += sum([1 if dep2idx[token.dep] == head[token.token_id][1] else 0 for (_, token) in enumerate(
                 non_punc_tokens)])
 
             # all_tokens += len(sentence.tokens)
             all_tokens += len(non_punc_tokens)
 
-        UAS = correct_tokens / float(all_tokens)
-        return UAS
+        UAS = correct_tokens_UAS / float(all_tokens)
+        LAS = correct_tokens_LAS / float(all_tokens)
+        return UAS, LAS
 
 
     def run_epoch(self, sess, config, dataset, train_writer, merged):
@@ -339,9 +353,9 @@ class ParserModel(Model):
     def run_valid_epoch(self, sess, dataset):
         print "Evaluating on dev set",
         self.compute_dependencies(sess, dataset.valid_data, dataset)
-        valid_UAS = self.get_UAS(dataset.valid_data)
-        print "- dev UAS: {:.2f}".format(valid_UAS * 100.0)
-        return valid_UAS
+        valid_UAS, valid_LAS = self.get_UAS(dataset.valid_data, dataset.dep2idx) # MODIFIED
+        print "- dev UAS: {:.2f}, dev LAS: {:.2f}".format(valid_UAS * 100.0, valid_LAS * 100.0)
+        return valid_UAS, valid_LAS
 
 
     def fit(self, sess, saver, config, dataset, train_writer, valid_writer, merged):
@@ -352,7 +366,7 @@ class ParserModel(Model):
             summary, loss = self.run_epoch(sess, config, dataset, train_writer, merged)
 
             if (epoch + 1) % dataset.model_config.run_valid_after_epochs == 0:
-                valid_UAS = self.run_valid_epoch(sess, dataset)
+                valid_UAS, _ = self.run_valid_epoch(sess, dataset)
                 valid_UAS_summary = tf.summary.scalar("valid_UAS", tf.constant(valid_UAS, dtype=tf.float32))
                 valid_writer.add_summary(sess.run(valid_UAS_summary), epoch + 1)
                 if valid_UAS > best_valid_UAS:
@@ -441,8 +455,8 @@ def main(flag, load_existing_dump=False):
             saver.restore(sess, os.path.join(DataConfig.data_dir_path, DataConfig.model_dir,
                                              DataConfig.model_name))
             model.compute_dependencies(sess, dataset.test_data, dataset)
-            test_UAS = model.get_UAS(dataset.test_data)
-            print "test UAS: {}".format(test_UAS * 100)
+            test_UAS, test_LAS = model.get_UAS(dataset.test_data, dataset.dep2idx)
+            print "test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100) # MODIFIED
 
             train_writer.close()
             valid_writer.close()
@@ -465,8 +479,8 @@ def main(flag, load_existing_dump=False):
                 saver.restore(sess, ckpt_path)
                 highlight_string("Testing")
                 model.compute_dependencies(sess, dataset.test_data, dataset)
-                test_UAS = model.get_UAS(dataset.test_data)
-                print "test UAS: {}".format(test_UAS * 100)
+                test_UAS, test_LAS = model.get_UAS(dataset.test_data, dataset.dep2idx)
+                print "test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100) # MODIFIED
                 # model.run_valid_epoch(sess, dataset.valid_data, dataset)
                 # valid_UAS = model.get_UAS(dataset.valid_data)
                 # print "valid UAS: {}".format(valid_UAS * 100)
