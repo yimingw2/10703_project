@@ -224,10 +224,11 @@ class A2C():
 			# random shuffle training data
 			a = np.arange(len(self.dataset.train_data))
 			np.random.shuffle(a)
-			for j in range(a.shape[0]):
-				idx = a[j]
+			for k in range(a.shape[0]):
+				idx = a[k]
 				sentence = self.dataset.train_data[idx]
 				states, actions, rewards = self.generate_episode(sess, sentence)
+
 				values = sess.run(self.critic_model.output,
 								  feed_dict=self.critic_model.create_feed_dict(states))
 				T = len(rewards)
@@ -259,10 +260,12 @@ class A2C():
 				feed_critic[self.critic_learning_rate] = self.critic_lr
 				sess.run(self.train_op_critic, feed_dict=feed_critic)
 
-				if j % 10 == 0:
-					print("finish training {} sentences.".format(j))
+				if k % 200 == 0:
+					print("finish training {} sentences.".format(k))
+					self.test(sess)
 
 			# test for every epoch
+			print("finish {} epoch, start testing...".format(i))
 			self.test(sess)
 
 
