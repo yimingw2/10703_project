@@ -212,6 +212,7 @@ class A2C():
 		states.append(state_word)
 		states.append(state_pos)
 		states.append(state_dep)
+		state = self.env.reset(sentence)
 
 		return states, actions, rewards
 
@@ -275,7 +276,6 @@ class A2C():
 		self.actor_model.compute_dependencies(sess, self.dataset.test_data, self.dataset)
 		test_UAS, test_LAS = self.actor_model.get_UAS(self.dataset.test_data, self.dataset.dep2idx)
 		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
-
 		# computer average reward
 		reward_list = []
 		for i, test_sent in enumerate(self.dataset.test_data):

@@ -325,10 +325,8 @@ class ParserModel(Model):
                 head[t.token_id] = (h.token_id, l) # MODIFIED
 
             non_punc_tokens = [token for token in sentence.tokens if token.pos not in punc_token_pos]
-            correct_tokens_UAS += sum([1 if token.head_id == head[token.token_id][0] else 0 for (_, token) in enumerate(
-                non_punc_tokens)])
-            correct_tokens_LAS += sum([1 if (token.head_id == head[token.token_id][0] and dep2idx[token.dep]) == head[token.token_id][1] else 0 for (_, token) in enumerate(
-                non_punc_tokens)])
+            correct_tokens_UAS += sum([1 if token.head_id == head[token.token_id][0] else 0 for (_, token) in enumerate(non_punc_tokens)])
+            correct_tokens_LAS += sum([1 if (token.head_id == head[token.token_id][0] and dep2idx[token.dep] == head[token.token_id][1]) else 0 for (_, token) in enumerate(non_punc_tokens)])
 
             # all_tokens += len(sentence.tokens)
             all_tokens += len(non_punc_tokens)
