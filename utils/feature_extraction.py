@@ -142,6 +142,7 @@ UNK_TOKEN = Token(-1, UNK, UNK, UNK, -1)
 
 
 class Sentence(object):
+    
     def __init__(self, tokens):
         self.Root = Token(-1, ROOT, ROOT, ROOT, -1)
         self.tokens = tokens
