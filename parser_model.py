@@ -154,6 +154,8 @@ class ParserModel(Model):
                                                 0.01, trainable=True)
                 b3 = random_uniform_initializer((self.config.num_classes,), "bias3", 0.01, trainable=True)
         with tf.variable_scope("predictions"):
+            # self.logits = tf.add(tf.matmul(h2, w3), b3, name="prediction_logits")
+            # predictions = tf.nn.softmax(self.logits, axis=1) # MODIFIED
             predictions = tf.add(tf.matmul(h2, w3), b3, name="prediction_logits")
 
         return predictions
