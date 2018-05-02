@@ -94,9 +94,9 @@ class Critic():
 		self._add_placeholders()
 		self.embeddings = self._add_embedding()
 
-		dense = tf.layers.dense(self.embeddings, 16, activation=tf.nn.relu, name='critic_dense_1')
-		dense = tf.layers.dense(dense, 16, activation=tf.nn.relu, name='critic_dense_2')
-		dense = tf.layers.dense(dense, 32, activation=tf.nn.relu, name='critic_dense_3')
+		dense = tf.layers.dense(self.embeddings, 128, activation=tf.nn.relu, name='critic_dense_1')
+		dense = tf.layers.dense(dense, 128, activation=tf.nn.relu, name='critic_dense_2')
+		dense = tf.layers.dense(dense, 64, activation=tf.nn.relu, name='critic_dense_3')
 		dense = tf.layers.dense(dense, 32, activation=tf.nn.relu, name='critic_dense_4')
 		output = tf.layers.dense(dense, 1, name='critic_dense_5')
 		return output
@@ -113,20 +113,20 @@ class Critic():
 
 		with tf.variable_scope("critic_input_placeholders"):
 			self.word_input_placeholder = tf.placeholder(shape=[None, self.config.word_features_types],
-														 dtype=tf.int32, name="batch_word_indices")
+														 dtype=tf.int32, name="critic_batch_word_indices")
 			self.pos_input_placeholder = tf.placeholder(shape=[None, self.config.pos_features_types],
-														dtype=tf.int32, name="batch_pos_indices")
+														dtype=tf.int32, name="critic_batch_pos_indices")
 			self.dep_input_placeholder = tf.placeholder(shape=[None, self.config.dep_features_types],
-														dtype=tf.int32, name="batch_dep_indices")
+														dtype=tf.int32, name="critic_batch_dep_indices")
 
 
 	def _add_embedding(self):
 		with tf.variable_scope("critic_feature_lookup"):
-			self.word_embedding_matrix = random_uniform_initializer(self.word_embeddings.shape, "word_embedding_matrix",
+			self.word_embedding_matrix = random_uniform_initializer(self.word_embeddings.shape, "critic_word_embedding_matrix",
 																	0.01, trainable=True)
-			self.pos_embedding_matrix = random_uniform_initializer(self.pos_embeddings.shape, "pos_embedding_matrix",
+			self.pos_embedding_matrix = random_uniform_initializer(self.pos_embeddings.shape, "critic_pos_embedding_matrix",
 																   0.01, trainable=True)
-			self.dep_embedding_matrix = random_uniform_initializer(self.dep_embeddings.shape, "dep_embedding_matrix",
+			self.dep_embedding_matrix = random_uniform_initializer(self.dep_embeddings.shape, "critic_dep_embedding_matrix",
 																   0.01, trainable=True)
 
 			word_context_embeddings = tf.nn.embedding_lookup(self.word_embedding_matrix, self.word_input_placeholder)
@@ -135,23 +135,23 @@ class Critic():
 
 			word_embeddings = tf.reshape(word_context_embeddings,
 										 [-1, self.config.word_features_types * self.config.embedding_dim],
-										 name="word_context_embeddings")
+										 name="critic_word_context_embeddings")
 			pos_embeddings = tf.reshape(pos_context_embeddings,
 										[-1, self.config.pos_features_types * self.config.embedding_dim],
-										name="pos_context_embeddings")
+										name="critic_pos_context_embeddings")
 			dep_embeddings = tf.reshape(dep_context_embeddings,
 										[-1, self.config.dep_features_types * self.config.embedding_dim],
-										name="dep_context_embeddings")
+										name="critic_dep_context_embeddings")
 
 		with tf.variable_scope("critic_batch_inputs"):
-			embeddings = tf.concat([word_embeddings, pos_embeddings, dep_embeddings], 1, name="batch_feature_matrix")
+			embeddings = tf.concat([word_embeddings, pos_embeddings, dep_embeddings], 1, name="critic_batch_feature_matrix")
 
 		return embeddings # word_embeddings, pos_embeddings, dep_embeddings
 
 
 class A2C():
 
-	def __init__(self, dataset, env, action_num, actor_model, lr, critic_model, critic_lr, num_epoch, epsilon, n=20, name=None):     
+	def __init__(self, dataset, env, action_num, actor_model, lr, critic_model, critic_lr, num_epoch, epsilon, e_sm=1e-8, n=20, name=None):     
 		# Initializes A2C.
 		# :param model: The actor model.
 		# :param lr: Learning rate for the actor model.
@@ -173,6 +173,7 @@ class A2C():
 		self.n = n
 		self.name = name
 		self.epsilon = epsilon
+		self.e_sm = e_sm
 
 		self._add_placeholder()
 		self.train_op_actor, self.train_op_critic = self._build_train_op()
@@ -188,9 +189,9 @@ class A2C():
 
 	def _build_train_op(self):
 		# loss for actor
-		# actor_output = tf.nn.softmax(logits=self.actor_model.pred, axis=1)
-		self.pred = tf.argmax(self.actor_model.pred, axis=1)
-		self.neg_log_prob = -tf.log(tf.expand_dims(tf.reduce_sum(self.actor_model.pred * tf.cast(self.actions, dtype=tf.float32), axis=1), axis=1))
+
+		self.actor_output = tf.nn.softmax(logits=self.actor_model.pred, axis=1)
+		self.neg_log_prob = -tf.log(tf.expand_dims(tf.reduce_sum(self.actor_output * tf.cast(self.actions, dtype=tf.float32), axis=1) + self.e_sm, axis=1))
 		self.loss_a = tf.reduce_mean(self.neg_log_prob * self.advantage)
 		train_op_actor = tf.train.AdamOptimizer(self.actor_lr).minimize(self.loss_a)
 		# loss for critic
@@ -212,7 +213,7 @@ class A2C():
 		return e_prob
 
 
-	def generate_episode(self, sess, sentence):
+	def generate_episode(self, sess, sentence, train=True):
 
 		states = []
 		state_word = []
@@ -247,7 +248,8 @@ class A2C():
 		states.append(state_word)
 		states.append(state_pos)
 		states.append(state_dep)
-		state = self.env.reset(sentence)
+		if train:
+			state = self.env.reset(sentence)
 
 		return states, actions, rewards
 
@@ -256,13 +258,14 @@ class A2C():
 		# Trains the model on a single episode using A2C.
 		sess.run(tf.global_variables_initializer())
 		# var_list = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.startswith('layer_connections')]
-		# var_list = [v for v in tf.global_variables() if v.name.startswith('layer_connections') or v.name.startswith('feature_lookup')]
+		var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
 		# for var in var_list:
 		# 	print(var.name)
 		# exit(0)
-		# saver = tf.train.Saver()
-		# ckpt_path = tf.train.latest_checkpoint(os.path.join("./data", "params_2017-09-26"))
-		# saver.restore(sess, os.path.join("./data", "params_2017-09-26", "parser.weights"))
+		saver = tf.train.Saver(var_list)
+		# ckpt_path = tf.train.latest_checkpoint(os.path.join("./data", "params_2018-05-01"))
+		saver.restore(sess, os.path.join("./data", "params_2018-05-01", "parser.weights"))
+		# saver.restore(sess, ckpt_path)
 
 		for i in range(self.num_epoch):
 			# random shuffle training data
@@ -297,7 +300,7 @@ class A2C():
 				feed_actor[self.actions] = actions_onehot
 				feed_actor[self.advantage] = adv
 				feed_actor[self.actor_learning_rate] = self.actor_lr
-				_, loss_actor, logits, pred = sess.run([self.train_op_actor, self.loss_a, self.actor_model.logits, self.actor_model.pred], feed_dict=feed_actor)
+				_, loss_actor, acc_actor, debug, actor_o = sess.run([self.train_op_actor, self.loss_a, self.actor_model.accuracy, self.neg_log_prob, self.actor_output], feed_dict=feed_actor)
 
 				# update critic model
 				feed_critic = self.critic_model.create_feed_dict(inputs_batch=states)
@@ -307,8 +310,12 @@ class A2C():
 
 				if k % 50 == 0:
 					sum_reward = np.sum(rewards)
+					avg_reward = np.mean(rewards)
+					# print(actions)
 					# print(rewards)
-					print("finish training {} sentences, actor loss: {}, critic loss: {}, sum_reward: {}".format(k, loss_actor, loss_critic, sum_reward))
+					# print(debug)
+					# print(actor_o)
+					print("{}, loss_a: {}, loss_c: {}, total reward: {}, avg reward: {}, actor acc: {}".format(k, loss_actor, loss_critic, sum_reward, avg_reward, acc_actor))
 				# if loss_actor == 0:
 				# 	print("actions:", actions)
 				# 	print("logits:", logits)
@@ -322,23 +329,18 @@ class A2C():
 
 
 	def test(self, sess):
-
-		# compute accuracy
-		self.actor_model.compute_dependencies(sess, self.dataset.test_data, self.dataset)
-		test_UAS, test_LAS = self.actor_model.get_UAS(self.dataset.test_data, self.dataset.dep2idx)
-		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
-		# computer average reward
-		'''
+		
 		reward_list = []
 		for i, test_sent in enumerate(self.dataset.test_data):
-			states, actions, rewards = self.generate_episode(sess, test_sent)
+			states, actions, rewards = self.generate_episode(sess, test_sent, False)
 			rewards = np.sum(np.array(rewards))
 			reward_list.append(rewards)
 		r_mean = np.mean(reward_list)
 		r_std = np.std(reward_list)
 		print("test mean reward: {}, mean std: {}".format(r_mean, r_std))
-		'''
-
+		test_UAS, test_LAS = self.actor_model.get_UAS_LAS(self.dataset.test_data, self.dataset.dep2idx)
+		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
+		
 
 def parse_arguments():
 	# Command-line flags are defined here.
@@ -370,15 +372,61 @@ def main():
 
 	dataset = load_datasets(True)
 	config = dataset.model_config
-	actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
-	critic_model = Critic(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
-
 	env = ParserEnv(dataset)
 	sess = tf.Session()
-	model = A2C(dataset, env, 2*dataset.model_config.dep_vocab_size+1, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, n, name)
-	model.train(sess)
+	with tf.variable_scope("model") as model_scope:
+		actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
+		critic_model = Critic(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
+		model = A2C(dataset, env, 2*dataset.model_config.dep_vocab_size+1, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, 1e-8, n, name)
+		model.train(sess)
+
+
+def uni_test():
+	args = parse_arguments()
+	num_epoch = args.num_epoch
+	actor_lr = args.actor_lr
+	critic_lr = args.critic_lr
+	n = args.n
+	epsilon = args.epsilon
+	name = args.name
+
+	dataset = load_datasets(True)
+	config = dataset.model_config
+	env = ParserEnv(dataset)
+	sess = tf.Session()
+	actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
+
+	sentence = dataset.train_data[0]
+	state = env.reset(sentence)
+	done = False
+	while not done:
+			word_inputs_batch = [state[0]]
+			pos_inputs_batch = [state[1]]
+			dep_inputs_batch = [state[2]]
+			action_prob = sess.run(actor_model.pred, feed_dict=actor_model.create_feed_dict([word_inputs_batch, \
+																							 pos_inputs_batch, \
+																							 dep_inputs_batch]))
+			legal_labels = np.asarray([sentence.get_legal_labels(dataset.model_config.dep_vocab_size)], dtype=np.float32)
+			action = np.argmax(action_prob + 1000 * legal_labels)
+			# action_prob_e = self._epsilon_greedy_policy(action_prob[0])
+			# action = np.random.choice(85, 1, p=action_prob_e)[0]
+
+			step_num += 1
+			next_state, reward, done = self.env.step(sentence, action, step_num)
+			state_word.append(state[0])
+			state_pos.append(state[1])
+			state_dep.append(state[2])
+			actions.append(action)
+			rewards.append(reward)
+			state = next_state
+	print(len(sentence.buff))
+	state = env.reset(sentence)
+	print(len(sentence.buff))
+
+
 
 
 if __name__ == "__main__":
 	main()
+	# uni_test()
 

@@ -154,8 +154,6 @@ class ParserModel(Model):
                                                 0.01, trainable=True)
                 b3 = random_uniform_initializer((self.config.num_classes,), "bias3", 0.01, trainable=True)
         with tf.variable_scope("predictions"):
-            # self.logits = tf.add(tf.matmul(h2, w3), b3, name="prediction_logits")
-            # predictions = tf.nn.softmax(self.logits, axis=1) # MODIFIED
             predictions = tf.add(tf.matmul(h2, w3), b3, name="prediction_logits")
 
         return predictions
@@ -317,7 +315,7 @@ class ParserModel(Model):
         correct_tokens_LAS = 0
         all_tokens = 0
         punc_token_pos = [pos_prefix + each for each in punc_pos]
-        for sentence in data:
+        for i, sentence in enumerate(data):
             # reset each predicted head before evaluation
             [token.reset_predicted_head_id() for token in sentence.tokens]
 
@@ -329,6 +327,38 @@ class ParserModel(Model):
             non_punc_tokens = [token for token in sentence.tokens if token.pos not in punc_token_pos]
             correct_tokens_UAS += sum([1 if token.head_id == head[token.token_id][0] else 0 for (_, token) in enumerate(non_punc_tokens)])
             correct_tokens_LAS += sum([1 if (token.head_id == head[token.token_id][0] and dep2idx[token.dep] == head[token.token_id][1]) else 0 for (_, token) in enumerate(non_punc_tokens)])
+
+            # all_tokens += len(sentence.tokens)
+            all_tokens += len(non_punc_tokens)
+
+        UAS = correct_tokens_UAS / float(all_tokens)
+        LAS = correct_tokens_LAS / float(all_tokens)
+        return UAS, LAS
+
+
+    def get_UAS_LAS(self, data, dep2idx):
+        # MODIFIED
+        correct_tokens_UAS = 0
+        correct_tokens_LAS = 0
+        all_tokens = 0
+        punc_token_pos = [pos_prefix + each for each in punc_pos]
+        for i, sentence in enumerate(data):
+            # reset each predicted head before evaluation
+            [token.reset_predicted_head_id() for token in sentence.tokens]
+
+            head = dict()
+            # assert len(sentence.dependencies) == len(sentence.predicted_dependencies)
+            for h, t, l in sentence.predicted_dependencies:
+                head[t.token_id] = (h.token_id, l) # MODIFIED
+
+            non_punc_tokens = [token for token in sentence.tokens if token.pos not in punc_token_pos]
+
+            for _, token in enumerate(non_punc_tokens):
+                if token.token_id in head:
+                    if token.head_id == head[token.token_id][0]:
+                        correct_tokens_UAS += 1
+                    if token.head_id == head[token.token_id][0] and dep2idx[token.dep] == head[token.token_id][1]:
+                        correct_tokens_LAS += 1
 
             # all_tokens += len(sentence.tokens)
             all_tokens += len(non_punc_tokens)
