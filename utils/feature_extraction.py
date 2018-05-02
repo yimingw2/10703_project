@@ -46,46 +46,54 @@ class DataConfig:  # data, embedding, model path etc.
 
 
 class ModelConfig(object):  # Takes care of shape, dimensions used for tf model
-    # Input
-    word_features_types = None
-    pos_features_types = None
-    dep_features_types = None
-    num_features_types = None
-    embedding_dim = 50
 
-    # hidden_size
-    l1_hidden_size = 200
-    l2_hidden_size = 15
+    def __init__(self, arc_only):
 
-    # output
-    num_classes = 42 # 3 # MODIFIED
+        self.arc_only = arc_only
+        # Input
+        self.word_features_types = None
+        self.pos_features_types = None
+        self.dep_features_types = None
+        self.num_features_types = None
+        self.embedding_dim = 50
 
-    # Vocab
-    word_vocab_size = None
-    pos_vocab_size = None
-    dep_vocab_size = 42 # None
+        # hidden_size
+        self.l1_hidden_size = 200
+        self.l2_hidden_size = 15
 
-    # num_epochs
-    n_epochs = 20
+        # output
+        if arc_only:
+            self.num_classes = 3
+        else:
+            self.num_classes = 85 # MODIFIED
 
-    # batch_size
-    batch_size = 2048
 
-    # dropout
-    keep_prob = 0.5
-    reg_val = 1e-8
+        # Vocab
+        self.word_vocab_size = None
+        self.pos_vocab_size = None
+        self.dep_vocab_size = 42 # None
 
-    # learning_rate
-    lr = 0.001
+        # num_epochs
+        self.n_epochs = 20
 
-    # load existing vocab
-    load_existing_vocab = False
+        # batch_size
+        self.batch_size = 2048
 
-    # summary
-    write_summary_after_epochs = 1
+        # dropout
+        self.keep_prob = 0.5
+        self.reg_val = 1e-8
 
-    # valid run
-    run_valid_after_epochs = 1
+        # learning_rate
+        self.lr = 0.001
+
+        # load existing vocab
+        self.load_existing_vocab = False
+
+        # summary
+        self.write_summary_after_epochs = 1
+
+        # valid run
+        self.run_valid_after_epochs = 1
 
 
 class SettingsConfig:  # enabling and disabling features, feature types
@@ -207,15 +215,20 @@ class Sentence(object):
             return NULL_TOKEN
 
 
-    def get_legal_labels(self, num_dep):
+    def get_legal_labels(self, num_dep, arc_only):
         # labels = ([1] if len(self.stack) > 2 else [0])
         # labels += ([1] if len(self.stack) >= 2 else [0])
         # labels += [1] if len(self.buff) > 0 else [0]
-        labels = ([1] if len(self.buff) > 0 else [0]) # 0: shift
-        labels_temp = ([1] if len(self.stack) > 2 else [0]) # 1: left-arc
-        labels_temp += ([1] if len(self.stack) >= 2 else [0]) # 2: right-arc
-        for i in range(num_dep):
-            labels += labels_temp
+        if arc_only:
+            labels = ([1] if len(self.buff) > 0 else [0])
+            labels += ([1] if len(self.stack) > 2 else [0])
+            labels += ([1] if len(self.stack) >= 2 else [0])
+        else:
+            labels = ([1] if len(self.buff) > 0 else [0]) # 0: shift
+            labels_temp = ([1] if len(self.stack) > 2 else [0]) # 1: left-arc
+            labels_temp += ([1] if len(self.stack) >= 2 else [0]) # 2: right-arc
+            for i in range(num_dep):
+                labels += labels_temp
         return labels
 
 
@@ -484,14 +497,20 @@ class FeatureExtractor(object):
                 # Update left/right children
                 # MODIFIED
                 if curr_transition == 0:
-                    arc_label = None
+                    arc_label = -1
                 else:
                     stack_token_0 = sentence.stack[-1]
                     stack_token_1 = sentence.stack[-2]
                     if curr_transition == 1: # left arc
-                        arc_label = dep2idx[stack_token_1.dep]
+                        if self.model_config.arc_only:
+                            arc_label = -1
+                        else:
+                            arc_label = dep2idx[stack_token_1.dep]
                     else: # right arc
-                        arc_label = dep2idx[stack_token_0.dep]
+                        if self.model_config.arc_only:
+                            arc_label = -1
+                        else:
+                            arc_label = dep2idx[stack_token_0.dep]
 
                 if curr_transition != 0: # != 2:
                     sentence.update_child_dependencies(curr_transition, arc_label)
@@ -502,7 +521,10 @@ class FeatureExtractor(object):
                 if curr_transition == 0:
                     true_label = 0
                 else:
-                    true_label = (arc_label + 1) * 2 - (2 - curr_transition)
+                    if self.model_config.arc_only:
+                        true_label = curr_transition
+                    else:
+                        true_label = (arc_label + 1) * 2 - (2 - curr_transition)
                 labels.append(true_label)
                 word_inputs.append(word_input)
                 pos_inputs.append(pos_input)
@@ -557,8 +579,8 @@ class DataReader(object):
         return data_objects
 
 
-def load_datasets(load_existing_dump=False):
-    model_config = ModelConfig()
+def load_datasets(arc_only, load_existing_dump=False):
+    model_config = ModelConfig(arc_only)
 
     data_reader = DataReader()
     train_lines = open(os.path.join(DataConfig.data_dir_path, DataConfig.train_path), "r").readlines()
@@ -606,7 +628,6 @@ def load_datasets(load_existing_dump=False):
         dump_pickle(dataset.dep_embedding_matrix, os.path.join(DataConfig.dump_dir, DataConfig.dep_emb_file))
 
     print "converting data into ids.."
-    dataset.model_config.num_classes = 2 * len(dataset.dep2idx) + 1
     dataset.convert_data_to_ids()
     print "Done!"
     dataset.model_config.word_features_types = len(dataset.train_inputs[0][0])

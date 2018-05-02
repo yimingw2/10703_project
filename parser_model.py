@@ -280,16 +280,20 @@ class ParserModel(Model):
                                        feed_dict=self.create_feed_dict([word_inputs_batch, pos_inputs_batch,
                                                                         dep_inputs_batch]))
                 # MODIFIED
-                legal_labels = np.asarray([sentence.get_legal_labels(dataset.model_config.dep_vocab_size) for sentence in curr_sentences],
+                legal_labels = np.asarray([sentence.get_legal_labels(dataset.model_config.dep_vocab_size, self.config.num_classes) for sentence in curr_sentences],
                                           dtype=np.float32)
                 legal_transitions_whole = np.argmax(predictions + 1000 * legal_labels, axis=1)
                 # legal_transitions_whole = np.argmax(predictions, axis=1)
 
-                legal_transitions = np.array(legal_transitions_whole, copy=True)
-                legal_arc = np.array(legal_transitions_whole, copy=True)
-                legal_transitions[np.nonzero(legal_transitions)] = (legal_transitions[np.nonzero(legal_transitions)] - 1) % 2 + 1
-                legal_arc[np.where(legal_arc == 0)] = -1
-                legal_arc[np.where(legal_arc != -1)] = (legal_arc[np.where(legal_arc != -1)] - 1) / 2
+                if self.config.arc_only:
+                    legal_transitions = legal_transitions_whole
+                    legal_arc = -1 * np.ones((legal_transitions.shape[0],))
+                else:
+                    legal_transitions = np.array(legal_transitions_whole, copy=True)
+                    legal_arc = np.array(legal_transitions_whole, copy=True)
+                    legal_transitions[np.nonzero(legal_transitions)] = (legal_transitions[np.nonzero(legal_transitions)] - 1) % 2 + 1
+                    legal_arc[np.where(legal_arc == 0)] = -1
+                    legal_arc[np.where(legal_arc != -1)] = (legal_arc[np.where(legal_arc != -1)] - 1) / 2
 
                 # update left/right children so can be used for next feature vector
                 # MODIFIED
@@ -419,11 +423,11 @@ def highlight_string(temp):
     print 80 * "="
 
 
-def main(flag, load_existing_dump=False):
+def main(flag, arc_only=True, load_existing_dump=False):
     highlight_string("INITIALIZING")
     print "loading data.."
 
-    dataset = load_datasets(load_existing_dump)
+    dataset = load_datasets(arc_only, load_existing_dump)
     config = dataset.model_config
 
     print "word vocab Size: {}".format(len(dataset.word2idx))

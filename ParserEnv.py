@@ -8,22 +8,27 @@ np.set_printoptions(threshold=np.nan)
 
 class ParserEnv():
 
-	def __init__(self, dataset):
+	def __init__(self, dataset, arc_only):
 
 		self.dataset = dataset
 		self.num_classes = self.dataset.model_config.num_classes
+		self.arc_only = arc_only
 
 	
 	def step(self, sentence, action, num):
 
 		# update state inside sentence
-		if action == 0:
-			real_action = 0
+		if self.arc_only:
+			real_action = action
 			arc_label = -1
 		else:
-			action_temp = action - 1
-			real_action = action_temp % 2 + 1 
-			arc_label = action_temp / 2
+			if action == 0:
+				real_action = 0
+				arc_label = -1
+			else:
+				action_temp = action - 1
+				real_action = action_temp % 2 + 1 
+				arc_label = action_temp / 2
 
 		# judge if real_action is legal
 		if real_action == 0 and len(sentence.buff) == 0: # shift
@@ -58,7 +63,7 @@ class ParserEnv():
 				reward = -1
 			else:
 				reward = 4
-				if l == self.dataset.dep2idx[t.dep]:
+				if not self.arc_only and l == self.dataset.dep2idx[t.dep]:
 					reward += 1
 		# done
 		if (len(sentence.stack) == 1 and len(sentence.buff) == 0) or (num >= 3 * len(sentence.tokens)):
@@ -232,8 +237,6 @@ class A2C():
 			action_prob = sess.run(self.actor_model.pred, feed_dict=self.actor_model.create_feed_dict([word_inputs_batch, \
 																									   pos_inputs_batch, \
 																									   dep_inputs_batch]))
-			# legal_labels = np.asarray([sentence.get_legal_labels(self.dataset.model_config.dep_vocab_size)], dtype=np.float32)
-			# action = np.argmax(action_prob + 1000 * legal_labels)
 			action_prob_e = self._epsilon_greedy_policy(action_prob[0])
 			action = np.random.choice(self.action_num, 1, p=action_prob_e)[0]
 
@@ -257,15 +260,9 @@ class A2C():
 	def train(self, sess, min_actor_lr=3e-5, min_critic_lr=1e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.95):
 		# Trains the model on a single episode using A2C.
 		sess.run(tf.global_variables_initializer())
-		# var_list = [v for v in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) if v.name.startswith('layer_connections')]
-		var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
-		# for var in var_list:
-		# 	print(var.name)
-		# exit(0)
-		saver = tf.train.Saver(var_list)
-		# ckpt_path = tf.train.latest_checkpoint(os.path.join("./data", "params_2018-05-01"))
-		saver.restore(sess, os.path.join("./data", "params_2018-05-01", "parser.weights"))
-		# saver.restore(sess, ckpt_path)
+		# var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
+		# saver = tf.train.Saver(var_list)
+		# saver.restore(sess, os.path.join("./data", "params_2017-09-26", "parser.weights"))
 
 		for i in range(self.num_epoch):
 			# random shuffle training data
@@ -311,15 +308,7 @@ class A2C():
 				if k % 50 == 0:
 					sum_reward = np.sum(rewards)
 					avg_reward = np.mean(rewards)
-					# print(actions)
-					# print(rewards)
-					# print(debug)
-					# print(actor_o)
 					print("{}, loss_a: {}, loss_c: {}, total reward: {}, avg reward: {}, actor acc: {}".format(k, loss_actor, loss_critic, sum_reward, avg_reward, acc_actor))
-				# if loss_actor == 0:
-				# 	print("actions:", actions)
-				# 	print("logits:", logits)
-				# 	print("pred:", pred)
 				if k % 200 == 0:
 					self.test(sess)
 					
@@ -329,7 +318,7 @@ class A2C():
 
 
 	def test(self, sess):
-		
+
 		reward_list = []
 		for i, test_sent in enumerate(self.dataset.test_data):
 			states, actions, rewards = self.generate_episode(sess, test_sent, False)
@@ -357,6 +346,8 @@ def parse_arguments():
 						default=0.5, help="The epsilon used in epsilon greedy policy.")
 	parser.add_argument('--name', dest='name', type=str,
 						default='', help="name.")
+	parser.add_argument('--arc-only', dest='arc_only', type=bool, 
+						default=True, help="if action number is 3")
 	return parser.parse_args()
 
 
@@ -369,64 +360,19 @@ def main():
 	n = args.n
 	epsilon = args.epsilon
 	name = args.name
+	arc_only = args.arc_only
 
-	dataset = load_datasets(True)
+	dataset = load_datasets(arc_only, True)
 	config = dataset.model_config
-	env = ParserEnv(dataset)
+	env = ParserEnv(dataset, arc_only)
 	sess = tf.Session()
 	with tf.variable_scope("model") as model_scope:
 		actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
 		critic_model = Critic(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
-		model = A2C(dataset, env, 2*dataset.model_config.dep_vocab_size+1, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, 1e-8, n, name)
+		model = A2C(dataset, env, dataset.model_config.num_classes, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, 1e-8, n, name)
 		model.train(sess)
-
-
-def uni_test():
-	args = parse_arguments()
-	num_epoch = args.num_epoch
-	actor_lr = args.actor_lr
-	critic_lr = args.critic_lr
-	n = args.n
-	epsilon = args.epsilon
-	name = args.name
-
-	dataset = load_datasets(True)
-	config = dataset.model_config
-	env = ParserEnv(dataset)
-	sess = tf.Session()
-	actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
-
-	sentence = dataset.train_data[0]
-	state = env.reset(sentence)
-	done = False
-	while not done:
-			word_inputs_batch = [state[0]]
-			pos_inputs_batch = [state[1]]
-			dep_inputs_batch = [state[2]]
-			action_prob = sess.run(actor_model.pred, feed_dict=actor_model.create_feed_dict([word_inputs_batch, \
-																							 pos_inputs_batch, \
-																							 dep_inputs_batch]))
-			legal_labels = np.asarray([sentence.get_legal_labels(dataset.model_config.dep_vocab_size)], dtype=np.float32)
-			action = np.argmax(action_prob + 1000 * legal_labels)
-			# action_prob_e = self._epsilon_greedy_policy(action_prob[0])
-			# action = np.random.choice(85, 1, p=action_prob_e)[0]
-
-			step_num += 1
-			next_state, reward, done = self.env.step(sentence, action, step_num)
-			state_word.append(state[0])
-			state_pos.append(state[1])
-			state_dep.append(state[2])
-			actions.append(action)
-			rewards.append(reward)
-			state = next_state
-	print(len(sentence.buff))
-	state = env.reset(sentence)
-	print(len(sentence.buff))
-
-
 
 
 if __name__ == "__main__":
 	main()
-	# uni_test()
 
