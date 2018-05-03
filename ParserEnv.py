@@ -205,19 +205,23 @@ class A2C():
 
 		self.actor_pred = tf.nn.softmax(logits=self.actor_model.pred, axis=1)
 		self.neg_log_prob = -tf.log(tf.expand_dims(tf.reduce_sum(self.actor_pred * tf.cast(self.actions, dtype=tf.float32), axis=1) + self.e_sm, axis=1))
+		
+		# loss for actor
 		self.loss_a = tf.reduce_mean(self.neg_log_prob * self.advantage)
 		# train_op_actor = tf.train.AdamOptimizer(self.actor_lr).minimize(self.loss_a)
 		optimizer_actor = tf.train.AdamOptimizer(self.actor_lr)
 		gvs_actor = optimizer_actor.compute_gradients(self.loss_a)
-		capped_gvs_actor = [(tf.clip_by_norm(grad, 1), var) for grad, var in gvs_actor]
-		train_op_actor = optimizer_actor.apply_gradients(capped_gvs_actor)
+		c_gvs_actor = [(grad, var) if grad is None else (tf.clip_by_norm(grad, 1), var) for grad, var in gvs_actor]
+		train_op_actor = optimizer_actor.apply_gradients(c_gvs_actor)
+
 		# loss for critic
 		self.loss_c = tf.reduce_mean(tf.squared_difference(self.Rt, self.critic_model.output))
 		# train_op_critic = tf.train.AdamOptimizer(self.critic_lr).minimize(self.loss_c)
 		optimizer_critic = tf.train.AdamOptimizer(self.critic_lr)
 		gvs_critic = optimizer_critic.compute_gradients(self.loss_c)
-		capped_gvs_critic = [(tf.clip_by_norm(grad, 1), var) for grad, var in gvs_critic]
-		train_op_critic = optimizer_critic.apply_gradients(capped_gvs_critic)
+		c_gvs_critic = [(grad, var) if grad is None else (tf.clip_by_norm(grad, 1), var) for grad, var in gvs_critic]
+		train_op_critic = optimizer_critic.apply_gradients(c_gvs_critic)
+
 		return train_op_actor, train_op_critic
 
 
@@ -260,11 +264,8 @@ class A2C():
 				prob_rescale = legal_labels / np.sum(legal_labels)
 			else:
 				prob_rescale = prob_temp / np.sum(prob_temp)
-			# if np.sum(prob_rescale) == 0:
-			# 	print(action_prob)
-			# 	print(legal_labels)
-			# 	print(prob_temp)
-			action = np.random.choice(self.action_num, 1, p=action_prob)[0]
+
+			action = np.random.choice(self.action_num, 1, p=prob_rescale)[0]
 
 			step_num += 1
 			next_state, reward, done = self.env.step(sentence, action, step_num)
