@@ -159,6 +159,9 @@ class Sentence(object):
         self.dependencies = []
         self.predicted_dependencies = []
 
+        self.incorrect_tokens_UAS = 0
+        self.incorrect_tokens_LAS = 0
+
 
     def load_gold_dependency_mapping(self):
         # MODIFIED to add arc_label
@@ -220,13 +223,13 @@ class Sentence(object):
         # labels += ([1] if len(self.stack) >= 2 else [0])
         # labels += [1] if len(self.buff) > 0 else [0]
         if arc_only:
-            labels = ([1] if len(self.buff) > 0 else [0])
-            labels += ([1] if len(self.stack) > 2 else [0])
-            labels += ([1] if len(self.stack) >= 2 else [0])
+            labels = ([1.0] if len(self.buff) > 0 else [0.0])
+            labels += ([1.0] if len(self.stack) > 2 else [0.0])
+            labels += ([1.0] if len(self.stack) >= 2 else [0.0])
         else:
-            labels = ([1] if len(self.buff) > 0 else [0]) # 0: shift
-            labels_temp = ([1] if len(self.stack) > 2 else [0]) # 1: left-arc
-            labels_temp += ([1] if len(self.stack) >= 2 else [0]) # 2: right-arc
+            labels = ([1.0] if len(self.buff) > 0 else [0.0]) # 0: shift
+            labels_temp = ([1.0] if len(self.stack) > 2 else [0.0]) # 1: left-arc
+            labels_temp += ([1.0] if len(self.stack) >= 2 else [0.0]) # 2: right-arc
             for i in range(num_dep):
                 labels += labels_temp
         return labels
@@ -273,6 +276,8 @@ class Sentence(object):
 
     def clear_prediction_dependencies(self):
         self.predicted_dependencies = []
+        self.incorrect_tokens_UAS = 0
+        self.incorrect_tokens_LAS = 0
 
 
     def clear_children_info(self):
