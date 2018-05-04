@@ -188,6 +188,11 @@ class A2C():
 		self.epsilon = epsilon
 		self.e_sm = e_sm
 
+		self.training_episode = list()
+		self.reward_mean = list()
+		self.reward_std = list()
+		self.test_accuracy = list()
+
 		self._add_placeholder()
 		self.train_op_actor, self.train_op_critic = self._build_train_op()
 
@@ -265,7 +270,10 @@ class A2C():
 			else:
 				prob_rescale = prob_temp / np.sum(prob_temp)
 
-			action = np.random.choice(self.action_num, 1, p=prob_rescale)[0]
+			if train:
+				action = np.random.choice(self.action_num, 1, p=prob_rescale)[0]
+			else:
+				action = np.argmax(prob_rescale)
 
 			step_num += 1
 			next_state, reward, done = self.env.step(sentence, action, step_num)
@@ -284,19 +292,20 @@ class A2C():
 		return states, actions, rewards
 
 
-	def train(self, sess, min_actor_lr=3e-5, min_critic_lr=1e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.95):
+	def train(self, sess, saver, pretrained=False, min_actor_lr=3e-5, min_critic_lr=1e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.95):
 		# Trains the model on a single episode using A2C.
 		sess.run(tf.global_variables_initializer())
-
-		var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
-		saver = tf.train.Saver(var_list)
-		saver.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
+		if pretrained:
+			var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
+			saver_old = tf.train.Saver(var_list)
+			saver_old.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
 
 		for i in range(self.num_epoch):
 			# random shuffle training data
 			a = np.arange(len(self.dataset.train_data))
 			np.random.shuffle(a)
-			for k in range(a.shape[0]):
+			num_sent = a.shape[0]
+			for k in range(num_sent):
 				idx = a[k]
 				sentence = self.dataset.train_data[idx]
 				states, actions, rewards = self.generate_episode(sess, sentence)
@@ -333,17 +342,22 @@ class A2C():
 				feed_critic[self.critic_learning_rate] = self.critic_lr
 				_, loss_critic = sess.run([self.train_op_critic, self.loss_c], feed_dict=feed_critic)
 
-				if k % 50 == 0:
+				if k % 100 == 0:
 					sum_reward = np.sum(rewards)
 					avg_reward = np.mean(rewards)
-					if acc_actor == 0.5:
-						print(actions)
-						print(rewards)
-						print(pred)
 					print("{}, loss_a: {}, loss_c: {}, total reward: {}, avg reward: {}, actor acc: {}".format(k, loss_actor, loss_critic, sum_reward, avg_reward, acc_actor))
-				if k % 200 == 0:
-					self.test(sess)
-					
+				if k % 1000 == 0:
+					r_mean, r_std, test_UAS = self.test(sess)
+					self.training_episode.append(i*num_sent+k)
+					self.reward_mean.append(r_mean)
+					self.reward_std.append(r_std)
+					self.test_accuracy.append(test_UAS)
+					np.save('result/{}_training_ep'.format(self.name), self.training_episode)
+					np.save('result/{}_reward_mean'.format(self.name), self.reward_mean)
+					np.save('result/{}_reward_std'.format(self.name), self.reward_mean)
+					np.save('result/{}_test_acc'.format(self.name), self.test_accuracy)
+					saver.save(sess, 'model/{}_model'.format(self.name))
+				
 			# test for every epoch
 			print("finish {} epoch, start testing...".format(i))
 			self.test(sess)
@@ -361,12 +375,13 @@ class A2C():
 		print("test mean reward: {}, mean std: {}".format(r_mean, r_std))
 		test_UAS, test_LAS = self.actor_model.get_UAS_LAS(self.dataset.test_data, self.dataset.dep2idx)
 		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
+		return r_mean, r_std, test_UAS
 	
 
 
 class Reinforce():
 
-	def __init__(self, dataset, model, lr, num_episodes, env, e_sm=1e-8, name = None):
+	def __init__(self, dataset, model, lr, num_episodes, env, e_sm=1e-8, name=None):
 
 		self.dataset = dataset
 		self.model = model
@@ -384,9 +399,10 @@ class Reinforce():
 		self.learning_rate = tf.placeholder(tf.float32, shape=[])
 		self.train_op = self.build()
 
-		self.training_episode = []
-		self.reward_mean = []
-		self.reward_error = []
+		self.training_episode = list()
+		self.reward_mean = list()
+		self.reward_std = list()
+		self.test_accuracy = list()
 
 
 	def build(self):
@@ -419,23 +435,20 @@ class Reinforce():
 			word_inputs_batch = [state[0]]
 			pos_inputs_batch = [state[1]]
 			dep_inputs_batch = [state[2]]
-			action_prob, logits = sess.run([self.model_pred, self.model.pred], \
-											feed_dict=self.model.create_feed_dict([word_inputs_batch, pos_inputs_batch, dep_inputs_batch]))
+			action_prob = sess.run(self.model_pred, feed_dict=self.model.create_feed_dict([word_inputs_batch, pos_inputs_batch, dep_inputs_batch]))
 			action_prob = action_prob[0]
-			if np.math.isnan(action_prob[0]):
-				print("action_prob: {}".format(action_prob))
-				print("logits: {}".format(logits))
-
-			# action_prob_e = self._epsilon_greedy_policy(action_prob)
 			legal_labels = sentence.get_legal_labels(len(self.dataset.dep2idx), self.dataset.model_config.arc_only)
+			
 			prob_temp = action_prob * legal_labels  # remove illegal label
-			# print("action_prob: {}".format(action_prob))
-			# print("legal_labels: {}".format(legal_labels))
 			if np.sum(prob_temp) == 0:
 				prob_rescale = legal_labels / np.sum(legal_labels)
 			else:
 				prob_rescale = prob_temp / np.sum(prob_temp)
-			action = np.random.choice(self.action_num, 1, p=prob_rescale)[0]
+
+			if train:
+				action = np.random.choice(self.action_num, 1, p=prob_rescale)[0]
+			else:
+				action = np.argmax(prob_rescale)
 
 			step_num += 1
 			next_state, reward, done = self.env.step(sentence, action, step_num)
@@ -454,15 +467,21 @@ class Reinforce():
 		return states, actions, rewards
 
 
-	def train(self, sess, min_lr = 8e-4, epsilon = 1e-18, reward_scale=1e-2, gamma=0.99, k = 500):
+	def train(self, sess, saver, pretrained=False, min_lr=8e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.99, k=500):
 		# Trains the model
 		sess.run(tf.global_variables_initializer())
+
+		if pretrained:
+			var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
+			saver_old = tf.train.Saver(var_list)
+			saver_old.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
 
 		for i in range(self.num_episodes):
 
 			a = np.arange(len(self.dataset.train_data))
 			np.random.shuffle(a)
-			for k in range(a.shape[0]):
+			num_sent = a.shape[0]
+			for k in range(num_sent):
 				idx = a[k]
 				sentence = self.dataset.train_data[idx]
 
@@ -481,15 +500,22 @@ class Reinforce():
 				feed_model[self.learning_rate] = self.lr
 				l, _ = sess.run([self.loss, self.train_op], feed_dict=feed_model)
 
-				print("k: {}: loss: {}".format(k, l))
-
-				# if k % 50 == 0:
-				# 	sum_reward = np.sum(rewards)
-				# 	avg_reward = np.mean(rewards)
-				# 	print("{}, loss: {}, total reward: {}, avg reward: {}".format(k, l, sum_reward, avg_reward))
+				if k % 100 == 0:
+					sum_reward = np.sum(rewards)
+					avg_reward = np.mean(rewards)
+					print("{}, loss: {}, total reward: {}, avg reward: {}".format(k, l, sum_reward, avg_reward))
 				
-				# if k % 200 == 0:
-				# 	self.test(sess)
+				if k % 1000 == 0:
+					r_mean, r_std, test_UAS = self.test(sess)
+					self.training_episode.append(i*num_sent+k)
+					self.reward_mean.append(r_mean)
+					self.reward_std.append(r_std)
+					self.test_accuracy.append(test_UAS)
+					np.save('result_rf/{}_training_ep'.format(self.name), self.training_episode)
+					np.save('result_rf/{}_reward_mean'.format(self.name), self.reward_mean)
+					np.save('result_rf/{}_reward_std'.format(self.name), self.reward_mean)
+					np.save('result_rf/{}_test_acc'.format(self.name), self.test_accuracy)
+					saver.save(sess, 'model_rf/{}_model'.format(self.name))
 
 
 	def test(self, sess):
@@ -504,6 +530,7 @@ class Reinforce():
 		print("test mean reward: {}, mean std: {}".format(r_mean, r_std))
 		test_UAS, test_LAS = self.model.get_UAS_LAS(self.dataset.test_data, self.dataset.dep2idx)
 		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
+		return r_mean, r_std, test_UAS
 	
 
 
@@ -511,11 +538,11 @@ def parse_arguments():
 	# Command-line flags are defined here.
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--num-epoch', dest='num_epoch', type=int,
-						default=20, help="Number of episodes to train on.")
+						default=2000, help="Number of episodes to train on.")
 	parser.add_argument('--actor-lr', dest='actor_lr', type=float,
-						default=1e-3, help="The actor's learning rate.") # 3e-3
+						default=1e-5, help="The actor's learning rate.") # 3e-3
 	parser.add_argument('--critic-lr', dest='critic_lr', type=float,
-						default=1e-2, help="The critic's learning rate.") # 1e-2
+						default=2e-4, help="The critic's learning rate.") # 1e-2
 	parser.add_argument('--n', dest='n', type=int,
 						default=20, help="The value of N in N-step A2C.")
 	parser.add_argument('--epsilon', dest='epsilon', type=float,
@@ -524,6 +551,8 @@ def parse_arguments():
 						default='', help="name.")
 	parser.add_argument('--arc-only', dest='arc_only', type=bool, 
 						default=True, help="if action number is 3")
+	parser.add_argument('--pretrained', dest='pretrained', type=bool, 
+						default=False, help="if use pretrained model")
 	return parser.parse_args()
 
 
@@ -538,6 +567,7 @@ def main_A2C():
 	epsilon = args.epsilon
 	name = args.name
 	arc_only = args.arc_only
+	pretrained = args.pretrained
 
 	dataset = load_datasets(arc_only, True)
 	config = dataset.model_config
@@ -547,7 +577,8 @@ def main_A2C():
 		actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
 		critic_model = Critic(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
 		model = A2C(dataset, env, dataset.model_config.num_classes, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, 1e-8, n, name)
-		model.train(sess)
+		saver = tf.train.Saver()
+		model.train(sess, saver, pretrained)
 
 
 
@@ -561,6 +592,7 @@ def main_reinforce():
 	epsilon = args.epsilon
 	name = args.name
 	arc_only = args.arc_only
+	pretrained = args.pretrained
 
 	dataset = load_datasets(arc_only, True)
 	config = dataset.model_config
@@ -569,10 +601,39 @@ def main_reinforce():
 	with tf.variable_scope("model") as model_scope:
 		model_r = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
 		model = Reinforce(dataset, model_r, actor_lr, num_epoch, env)
-		model.train(sess)
+		saver = tf.train.Saver()
+		model.train(sess, saver, pretrained)
+
+
+
+def test_baseline():
+	args = parse_arguments()
+	num_epoch = args.num_epoch
+	actor_lr = args.actor_lr
+	critic_lr = args.critic_lr
+	n = args.n
+	epsilon = args.epsilon
+	name = args.name
+	arc_only = args.arc_only
+	pretrained = args.pretrained
+
+	dataset = load_datasets(arc_only, True)
+	config = dataset.model_config
+	env = ParserEnv(dataset, arc_only)
+	sess = tf.Session()
+	with tf.variable_scope("model") as model_scope:
+		actor_model = ParserModel(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
+		critic_model = Critic(config, dataset.word_embedding_matrix, dataset.pos_embedding_matrix, dataset.dep_embedding_matrix)
+		model = A2C(dataset, env, dataset.model_config.num_classes, actor_model, actor_lr, critic_model, critic_lr, num_epoch, epsilon, 1e-8, n, name)
+		var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
+		saver = tf.train.Saver(var_list)
+		saver.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
+		model.test(sess)
+
 
 
 if __name__ == "__main__":
-	main_A2C()
-	# main_reinforce()
+	# main_A2C()
+	main_reinforce()
+	# test_baseline()
 
