@@ -164,7 +164,7 @@ class Critic():
 
 class A2C():
 
-	def __init__(self, dataset, env, action_num, actor_model, lr, critic_model, critic_lr, num_epoch, epsilon, e_sm=1e-8, n=100, name=None):     
+	def __init__(self, dataset, env, action_num, actor_model, lr, critic_model, critic_lr, num_epoch, epsilon, e_sm=1e-8, n=200, name=None):     
 		# Initializes A2C.
 		# :param model: The actor model.
 		# :param lr: Learning rate for the actor model.
@@ -191,7 +191,7 @@ class A2C():
 		self.training_episode = list()
 		self.reward_mean = list()
 		self.reward_std = list()
-		self.test_accuracy = list()
+		self.test_acc_u = list()
 
 		self._add_placeholder()
 		self.train_op_actor, self.train_op_critic = self._build_train_op()
@@ -351,16 +351,16 @@ class A2C():
 					sum_reward = np.sum(rewards)
 					avg_reward = np.mean(rewards)
 					print("{}, loss_a: {}, loss_c: {}, total reward: {}, avg reward: {}, actor acc: {}".format(k, loss_actor, loss_critic, sum_reward, avg_reward, acc_actor))
-				if k % 1000 == 0 and (k != 0 or i != 0):
-					r_mean, r_std, test_UAS = self.test(sess)
+				if k % 1000 == 0: # and (k != 0 or i != 0):
+					r_mean, r_std, test_UAS, test_LAS = self.test(sess)
 					self.training_episode.append(i*num_sent+k)
 					self.reward_mean.append(r_mean)
 					self.reward_std.append(r_std)
-					self.test_accuracy.append(test_UAS)
+					self.test_acc_u.append(test_UAS)
 					np.save('result/{}_training_ep'.format(self.name), self.training_episode)
 					np.save('result/{}_reward_mean'.format(self.name), self.reward_mean)
 					np.save('result/{}_reward_std'.format(self.name), self.reward_mean)
-					np.save('result/{}_test_acc'.format(self.name), self.test_accuracy)
+					np.save('result/{}_test_accuracy'.format(self.name), self.test_acc_u)
 					saver.save(sess, 'model/{}_model'.format(self.name))
 				
 			# test for every epoch
@@ -380,7 +380,7 @@ class A2C():
 		print("test mean reward: {}, mean std: {}".format(r_mean, r_std))
 		test_UAS, test_LAS = self.actor_model.get_UAS_LAS(self.dataset.test_data, self.dataset.dep2idx)
 		print("test UAS: {}, test LAS: {}".format(test_UAS * 100, test_LAS * 100))
-		return r_mean, r_std, test_UAS
+		return r_mean, r_std, test_UAS, test_LAS
 	
 
 
@@ -549,7 +549,7 @@ def parse_arguments():
 	parser.add_argument('--critic-lr', dest='critic_lr', type=float,
 						default=2e-4, help="The critic's learning rate.") # 1e-2
 	parser.add_argument('--n', dest='n', type=int,
-						default=100, help="The value of N in N-step A2C.")
+						default=200, help="The value of N in N-step A2C.")
 	parser.add_argument('--epsilon', dest='epsilon', type=float,
 						default=0.5, help="The epsilon used in epsilon greedy policy.")
 	parser.add_argument('--name', dest='name', type=str,
