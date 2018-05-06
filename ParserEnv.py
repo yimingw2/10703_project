@@ -292,13 +292,20 @@ class A2C():
 		return states, actions, rewards
 
 
-	def train(self, sess, saver, pretrained=False, min_actor_lr=3e-5, min_critic_lr=1e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.95):
+	def train(self, sess, saver, pretrained=True, min_actor_lr=3e-5, min_critic_lr=1e-4, epsilon=1e-18, reward_scale=1e-2, gamma=0.95):
 		# Trains the model on a single episode using A2C.
-		sess.run(tf.global_variables_initializer())
+		# sess.run(tf.global_variables_initializer())
 		if pretrained:
-			var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
-			saver_old = tf.train.Saver(var_list)
-			saver_old.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
+			# var_list = [v for v in tf.global_variables() if v.name.startswith('model/layer_connections') or v.name.startswith('model/feature_lookup')]
+			# saver_old = tf.train.Saver(var_list)
+			# saver_old.restore(sess, os.path.join("./data", "params_2018-05-02", "parser.weights"))
+			saver.restore(sess, "model/{}_model".format(self.name))
+			self.training_episode = np.load('result/{}_training_ep.npy'.format(self.name)).tolist()
+			self.reward_mean= np.load('result/{}_reward_mean.npy'.format(self.name)).tolist()
+			self.reward_error= np.load('result/{}_reward_std.npy'.format(self.name)).tolist()
+			self.test_accuracy = np.load('result/{}_test_acc.npy'.format(self.name)).tolist()
+
+			offset = self.training_episode[-1]
 
 		for i in range(self.num_epoch):
 			# random shuffle training data
@@ -346,9 +353,9 @@ class A2C():
 					sum_reward = np.sum(rewards)
 					avg_reward = np.mean(rewards)
 					print("{}, loss_a: {}, loss_c: {}, total reward: {}, avg reward: {}, actor acc: {}".format(k, loss_actor, loss_critic, sum_reward, avg_reward, acc_actor))
-				if k % 1000 == 0:
+				if k % 1000 == 0 and (k != 0 or i != 0):
 					r_mean, r_std, test_UAS = self.test(sess)
-					self.training_episode.append(i*num_sent+k)
+					self.training_episode.append(offset + i*num_sent+k)
 					self.reward_mean.append(r_mean)
 					self.reward_std.append(r_std)
 					self.test_accuracy.append(test_UAS)
@@ -540,7 +547,7 @@ def parse_arguments():
 	parser.add_argument('--num-epoch', dest='num_epoch', type=int,
 						default=2000, help="Number of episodes to train on.")
 	parser.add_argument('--actor-lr', dest='actor_lr', type=float,
-						default=1e-5, help="The actor's learning rate.") # 3e-3
+						default=2e-5, help="The actor's learning rate.") # 3e-3
 	parser.add_argument('--critic-lr', dest='critic_lr', type=float,
 						default=2e-4, help="The critic's learning rate.") # 1e-2
 	parser.add_argument('--n', dest='n', type=int,
@@ -552,7 +559,7 @@ def parse_arguments():
 	parser.add_argument('--arc-only', dest='arc_only', type=bool, 
 						default=True, help="if action number is 3")
 	parser.add_argument('--pretrained', dest='pretrained', type=bool, 
-						default=False, help="if use pretrained model")
+						default=True, help="if use pretrained model")
 	return parser.parse_args()
 
 
@@ -633,7 +640,7 @@ def test_baseline():
 
 
 if __name__ == "__main__":
-	# main_A2C()
-	main_reinforce()
+	main_A2C()
+	# main_reinforce()
 	# test_baseline()
 
